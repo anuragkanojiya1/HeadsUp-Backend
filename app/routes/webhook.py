@@ -10,6 +10,10 @@ router = APIRouter()
 @router.post("/razorpay")
 async def webhook(request: Request):
     body = await request.body()
+
+    print("🔥 Webhook HIT")
+    print("Body:", body.decode())
+    
     signature = request.headers.get("X-Razorpay-Signature")
 
     expected = hmac.new(
