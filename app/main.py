@@ -7,3 +7,10 @@ app = FastAPI()
 
 app.include_router(escrow.router, prefix="/escrow")
 app.include_router(webhook.router, prefix="/webhook")
+
+@app.get("/")
+def root():
+    return {
+        "status": "running",
+        "service": "escrow-backend"
+    }
