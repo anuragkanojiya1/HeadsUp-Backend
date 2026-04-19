@@ -1,5 +1,6 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from app.core.auth import get_current_user
 from app.core.config import settings
 from app.schemas.escrow import EscrowCreateRequest
 from app.services.escrow_service import (
@@ -23,7 +24,10 @@ def _build_dev_transfer(escrow: dict) -> dict:
 
 
 @router.post("/create")
-def create(data: EscrowCreateRequest):
+def create(data: EscrowCreateRequest, current_user: dict = Depends(get_current_user)):
+    if data.employer_id != current_user["uid"]:
+        raise HTTPException(status_code=403, detail="Employer id must match authenticated user")
+
     escrow = create_escrow(data.model_dump())
     return {
         "escrow_id": escrow["escrow_id"],
@@ -33,8 +37,11 @@ def create(data: EscrowCreateRequest):
 
 
 @router.post("/submit-work/{escrow_id}")
-def submit(escrow_id: str):
+def submit(escrow_id: str, current_user: dict = Depends(get_current_user)):
     escrow = get_escrow(escrow_id)
+    if escrow["worker_id"] != current_user["uid"]:
+        raise HTTPException(status_code=403, detail="Only the assigned worker can submit work")
+
     updated = transition_escrow_status(escrow, "WORK_SUBMITTED")
     return {
         "status": updated["status"],
@@ -43,8 +50,10 @@ def submit(escrow_id: str):
 
 
 @router.post("/release/{escrow_id}")
-def release(escrow_id: str):
+def release(escrow_id: str, current_user: dict = Depends(get_current_user)):
     escrow = get_escrow(escrow_id)
+    if escrow["employer_id"] != current_user["uid"]:
+        raise HTTPException(status_code=403, detail="Only the employer can release escrow")
 
     if escrow["status"] != "WORK_SUBMITTED":
         raise HTTPException(
@@ -53,6 +62,8 @@ def release(escrow_id: str):
         )
 
     if settings.ESCROW_RELEASE_DEV_MODE:
+        if settings.APP_ENV == "production":
+            raise HTTPException(status_code=500, detail="Dev escrow release mode is not allowed in production")
         transfer = _build_dev_transfer(escrow)
     else:
         if not escrow.get("worker_account_id") or not escrow["worker_account_id"].startswith("acc_"):
@@ -74,10 +85,11 @@ def release(escrow_id: str):
         "transfer_id": transfer["id"],
     }
 
-
 @router.post("/refund/{escrow_id}")
-def refund_api(escrow_id: str):
+def refund_api(escrow_id: str, current_user: dict = Depends(get_current_user)):
     escrow = get_escrow(escrow_id)
+    if escrow["employer_id"] != current_user["uid"]:
+        raise HTTPException(status_code=403, detail="Only the employer can refund escrow")
 
     if not escrow.get("razorpay_payment_id"):
         raise HTTPException(status_code=400, detail="No payment to refund")

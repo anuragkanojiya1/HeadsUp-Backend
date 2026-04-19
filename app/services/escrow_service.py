@@ -58,6 +58,14 @@ def get_escrow_by_order_id(order_id: str):
     return _require_single_record(response, "Escrow not found for Razorpay order")
 
 
+def validate_payment_capture(escrow: dict, amount: int | None, currency: str | None):
+    if amount is not None and amount != escrow["amount"]:
+        raise HTTPException(status_code=400, detail="Payment amount does not match escrow amount")
+
+    if currency and currency != "INR":
+        raise HTTPException(status_code=400, detail="Unsupported payment currency")
+
+
 def transition_escrow_status(escrow: dict, new_status: str, payment_id: str | None = None):
     current_status = escrow["status"]
     if current_status == new_status:
@@ -90,4 +98,15 @@ def transition_escrow_status(escrow: dict, new_status: str, payment_id: str | No
 
 def mark_order_funded(order_id: str, payment_id: str):
     escrow = get_escrow_by_order_id(order_id)
+    return transition_escrow_status(escrow, "FUNDED", payment_id=payment_id)
+
+
+def mark_order_funded_from_payment(
+    order_id: str,
+    payment_id: str,
+    amount: int | None = None,
+    currency: str | None = None,
+):
+    escrow = get_escrow_by_order_id(order_id)
+    validate_payment_capture(escrow, amount=amount, currency=currency)
     return transition_escrow_status(escrow, "FUNDED", payment_id=payment_id)
