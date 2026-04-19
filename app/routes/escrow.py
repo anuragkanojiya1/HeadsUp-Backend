@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException
 
+from app.core.config import settings
 from app.schemas.escrow import EscrowCreateRequest
 from app.services.escrow_service import (
     create_escrow,
@@ -9,6 +10,16 @@ from app.services.escrow_service import (
 from app.services.razorpay_service import refund, transfer_to_worker
 
 router = APIRouter()
+
+
+def _build_dev_transfer(escrow: dict) -> dict:
+    return {
+        "id": f"dev_transfer_{escrow['id']}",
+        "account": escrow.get("worker_account_id"),
+        "amount": escrow["amount"],
+        "currency": "INR",
+        "mode": "dev",
+    }
 
 
 @router.post("/create")
@@ -41,17 +52,20 @@ def release(escrow_id: str):
             detail="Escrow must be in WORK_SUBMITTED state before release",
         )
 
-    if not escrow.get("worker_account_id") or not escrow["worker_account_id"].startswith("acc_"):
-        raise HTTPException(status_code=400, detail="Invalid worker account")
+    if settings.ESCROW_RELEASE_DEV_MODE:
+        transfer = _build_dev_transfer(escrow)
+    else:
+        if not escrow.get("worker_account_id") or not escrow["worker_account_id"].startswith("acc_"):
+            raise HTTPException(status_code=400, detail="Invalid worker account")
 
-    try:
-        transfer = transfer_to_worker(
-            escrow["worker_account_id"],
-            escrow["amount"],
-            escrow["id"],
-        )
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Transfer failed: {str(e)}") from e
+        try:
+            transfer = transfer_to_worker(
+                escrow["worker_account_id"],
+                escrow["amount"],
+                escrow["id"],
+            )
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Transfer failed: {str(e)}") from e
 
     updated = transition_escrow_status(escrow, "RELEASED")
     return {
@@ -64,11 +78,17 @@ def release(escrow_id: str):
 @router.post("/refund/{escrow_id}")
 def refund_api(escrow_id: str):
     escrow = get_escrow(escrow_id)
+
     if not escrow.get("razorpay_payment_id"):
-        raise HTTPException(status_code=400, detail="Escrow has no captured payment to refund")
+        raise HTTPException(status_code=400, detail="No payment to refund")
+
+    try:
+        refund_response = refund(escrow["razorpay_payment_id"])
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Refund failed: {str(e)}")
 
     updated = transition_escrow_status(escrow, "REFUNDED")
-    refund_response = refund(updated["razorpay_payment_id"])
+
     return {
         "status": updated["status"],
         "refund_id": refund_response.get("id"),
