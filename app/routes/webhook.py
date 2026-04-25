@@ -12,6 +12,9 @@ router = APIRouter()
 
 @router.post("/razorpay")
 async def webhook(request: Request):
+    if settings.ESCROW_PAYMENT_PROVIDER != "razorpay":
+        raise HTTPException(status_code=409, detail="Razorpay webhook is disabled for current provider")
+
     body = await request.body()
     signature = request.headers.get("X-Razorpay-Signature")
     if not signature:

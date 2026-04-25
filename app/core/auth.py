@@ -34,14 +34,18 @@ def get_current_user(
     credentials_value: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     x_debug_user_id: str | None = Header(default=None),
     x_debug_user_email: str | None = Header(default=None),
+    x_debug_user_role: str | None = Header(default=None),
 ):
     if settings.AUTH_DEV_MODE and settings.APP_ENV != "production" and x_debug_user_id:
+        role = (x_debug_user_role or "user").lower()
         return {
             "uid": x_debug_user_id,
             "email": x_debug_user_email,
             "claims": {
                 "uid": x_debug_user_id,
                 "email": x_debug_user_email,
+                "role": role,
+                "is_admin": role in {"admin", "ops", "superadmin"},
                 "auth_mode": "debug",
             },
         }
@@ -73,3 +77,23 @@ def get_current_user(
         "email": decoded_token.get("email"),
         "claims": decoded_token,
     }
+
+
+def _is_admin_from_claims(claims: dict) -> bool:
+    role = str(claims.get("role", "")).lower()
+    if role in {"admin", "ops", "superadmin"}:
+        return True
+
+    if claims.get("is_admin") is True or claims.get("admin") is True:
+        return True
+
+    return False
+
+
+def require_admin_user(current_user: dict = Depends(get_current_user)):
+    if not _is_admin_from_claims(current_user.get("claims", {})):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required",
+        )
+    return current_user

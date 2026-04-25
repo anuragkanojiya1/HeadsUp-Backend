@@ -21,6 +21,7 @@ class Settings:
         "yes",
         "on",
     }
+    ESCROW_PAYMENT_PROVIDER = os.getenv("ESCROW_PAYMENT_PROVIDER", "manual").lower()
 
     SUPABASE_URL = os.getenv("SUPABASE_URL")
     SUPABASE_KEY = os.getenv("SUPABASE_KEY")

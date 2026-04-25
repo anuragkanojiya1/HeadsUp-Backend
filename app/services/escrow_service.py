@@ -1,9 +1,9 @@
+from datetime import UTC, datetime
 from uuid import uuid4
 from fastapi import HTTPException
+from app.core.config import settings
 from app.db.supabase import supabase
-from app.services.razorpay_service import create_order
 from app.utils.state_machine import can_transition, VALID_TRANSITIONS
-
 
 def _require_single_record(response, error_message: str):
     data = getattr(response, "data", None)
@@ -12,8 +12,25 @@ def _require_single_record(response, error_message: str):
     return data
 
 
+def _is_razorpay_enabled() -> bool:
+    return settings.ESCROW_PAYMENT_PROVIDER == "razorpay"
+
+
+def _build_manual_order() -> dict:
+    return {
+        "id": f"manual_order_{uuid4()}",
+        "provider": "manual",
+        "status": "PENDING_MANUAL_FUNDING",
+    }
+
+
 def create_escrow(data):
-    order = create_order(data["amount"], str(uuid4()))
+    if _is_razorpay_enabled():
+        from app.services.razorpay_service import create_order
+
+        order = create_order(data["amount"], str(uuid4()))
+    else:
+        order = _build_manual_order()
 
     escrow = {
         "id": str(uuid4()),
@@ -24,7 +41,7 @@ def create_escrow(data):
         "worker_account_id": data["worker_account_id"],
         "amount": data["amount"],
         "razorpay_order_id": order["id"],
-        "status": "INITIATED"
+        "status": "INITIATED",
     }
 
     supabase.table("escrow_transactions").insert(escrow).execute()
@@ -33,6 +50,7 @@ def create_escrow(data):
         "escrow_id": escrow["id"],
         "amount": escrow["amount"],
         "order": order,
+        "provider": settings.ESCROW_PAYMENT_PROVIDER,
     }
 
 
@@ -62,11 +80,16 @@ def validate_payment_capture(escrow: dict, amount: int | None, currency: str | N
     if amount is not None and amount != escrow["amount"]:
         raise HTTPException(status_code=400, detail="Payment amount does not match escrow amount")
 
-    if currency and currency != "INR":
+    if currency and currency.upper() != "INR":
         raise HTTPException(status_code=400, detail="Unsupported payment currency")
 
 
-def transition_escrow_status(escrow: dict, new_status: str, payment_id: str | None = None):
+def transition_escrow_status(
+    escrow: dict,
+    new_status: str,
+    payment_id: str | None = None,
+    extra_updates: dict | None = None,
+):
     current_status = escrow["status"]
     if current_status == new_status:
         return escrow
@@ -81,6 +104,8 @@ def transition_escrow_status(escrow: dict, new_status: str, payment_id: str | No
     update_data = {"status": new_status}
     if payment_id:
         update_data["razorpay_payment_id"] = payment_id
+    if extra_updates:
+        update_data.update(extra_updates)
 
     response = (
         supabase.table("escrow_transactions")
@@ -110,3 +135,28 @@ def mark_order_funded_from_payment(
     escrow = get_escrow_by_order_id(order_id)
     validate_payment_capture(escrow, amount=amount, currency=currency)
     return transition_escrow_status(escrow, "FUNDED", payment_id=payment_id)
+
+
+def mark_escrow_funded(
+    escrow_id: str,
+    funded_by: str,
+    funding_reference: str,
+    funding_note: str | None = None,
+    payment_id: str | None = None,
+    amount: int | None = None,
+    currency: str | None = None,
+):
+    escrow = get_escrow(escrow_id)
+    validate_payment_capture(escrow, amount=amount, currency=currency)
+    manual_payment_id = payment_id or f"manual_payment_{uuid4()}"
+    return transition_escrow_status(
+        escrow,
+        "FUNDED",
+        payment_id=manual_payment_id,
+        extra_updates={
+            "funded_by": funded_by,
+            "funded_at": datetime.now(UTC).isoformat(),
+            "funding_reference": funding_reference,
+            "funding_note": funding_note,
+        },
+    )
